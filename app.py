@@ -1,6 +1,7 @@
 from flask import Flask
-import requests, os
-from datetime import datetime, timedelta
+import requests
+import os
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -13,37 +14,50 @@ def check_vuelo():
     PRECIO_MAXIMO = int(os.environ.get("PRECIO_MAXIMO", "600"))
 
     def buscar_vuelo(origen="EZE", destino="LON"):
-        fecha_desde = datetime.today().strftime("%Y-%m-%d")
-        fecha_hasta = (datetime.today() + timedelta(days=30)).strftime("%Y-%m-%d")
-        url = f"https://flightapi.io/api/search"
-        params = {
-            "apikey": FLIGHTAPI_KEY,
-            "from": origen,
-            "to": destino,
-            "departureDate": fecha_desde,
-            "returnDate": "",
-            "adults": 1,
-            "currency": "USD",
-            "limit": 1,
-            "sortBy": "price",
-        }
-        r = requests.get(url, params=params)
-        data = r.json()
-        if "data" not in data or not data["data"]:
+        fecha = datetime.today().strftime("%Y-%m-%d")
+        url = f"https://api.flightapi.io/onewaytrip/{FLIGHTAPI_KEY}/{origen}/{destino}/{fecha}/1/0/0/Economy/USD"
+
+        try:
+            r = requests.get(url)
+            print("Status code:", r.status_code)
+            if r.status_code != 200:
+                print("Respuesta no exitosa:", r.text)
+                return None
+
+            data = r.json()
+        except Exception as e:
+            print("Error al llamar a la API:", e)
             return None
-        vuelo = data["data"][0]
-        return {
-            "origen": origen,
-            "destino": destino,
-            "fecha": vuelo.get("departureDate", "Desconocida"),
-            "precio": vuelo.get("price", 9999),
-            "aerolinea": vuelo.get("airline", "Desconocida"),
-        }
+
+        try:
+            itinerarios = data.get("itineraries", [])
+            if not itinerarios:
+                return None
+
+            vuelo = itinerarios[0]
+            precio = float(vuelo["pricing_options"][0]["price"]["amount"])
+            aerolinea = vuelo["legs"][0]["segments"][0]["carrier"]["name"]
+            fecha_salida = vuelo["legs"][0]["segments"][0]["departure"]
+
+            return {
+                "origen": origen,
+                "destino": destino,
+                "fecha": fecha_salida,
+                "precio": precio,
+                "aerolinea": aerolinea,
+            }
+
+        except Exception as e:
+            print("Error procesando datos de vuelo:", e)
+            return None
 
     def enviar_telegram(msg):
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {"chat_id": CHAT_ID, "text": msg}
-        requests.post(url, data=data)
+        try:
+            requests.post(url, data=data)
+        except Exception as e:
+            print("Error enviando mensaje a Telegram:", e)
 
     vuelo = buscar_vuelo()
     if vuelo and vuelo["precio"] < PRECIO_MAXIMO:
@@ -56,11 +70,10 @@ def check_vuelo():
         )
         enviar_telegram(msg)
         return "Enviado ✅"
+
     return "Sin resultados 👀"
 
 
 if __name__ == "__main__":
-    import os
-
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
